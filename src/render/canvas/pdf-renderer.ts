@@ -18,7 +18,7 @@ import {asString, Color, isTransparent} from '../../css/types/color';
 import {calculateGradientDirection, calculateRadius, processColorStops} from '../../css/types/functions/gradient';
 import {CSSImageType, CSSURLImage, isLinearGradient, isRadialGradient} from '../../css/types/image';
 import {FIFTY_PERCENT, getAbsoluteValue} from '../../css/types/length-percentage';
-import {ElementContainer, FLAGS} from '../../dom/element-container';
+import {ElementContainer} from '../../dom/element-container';
 import {SelectElementContainer} from '../../dom/elements/select-element-container';
 import {TextareaElementContainer} from '../../dom/elements/textarea-element-container';
 // import {ReplacedElementContainer} from '../../dom/replaced-elements';
@@ -47,6 +47,13 @@ import {Path, transformPath} from '../path';
 import {Renderer} from '../renderer';
 import {ElementPaint, parseStackingContexts, StackingContext} from '../stacking-context';
 import {Vector} from '../vector';
+
+const PT_TO_PX_RATIO = 72 / 96;
+const IMAGE_QUALITY = 0.8;
+const DEFAULT_FALLBACK_FONT = 'Helvetica';
+const DEFAULT_PAGE_DECORATION_PADDING: [number, number, number, number] = [24, 24, 24, 24];
+const DASHED_LINE_WIDTH_ADJUST = 1.1;
+const TEXT_DECORATION_THICKNESS = 1;
 
 export type RenderConfigurations = RenderOptions & {
     backgroundColor: Color | null;
@@ -155,13 +162,17 @@ export class CanvasRenderer extends Renderer {
     private readonly pxToPt: (px: number) => number;
     private totalPages = 1;
     private fontMatchMode = false;
+    private fontMatchIndex: Map<string, FontConfig[]> = new Map();
+    private textFontCache: Map<string, string> = new Map();
+    private colorCache: Map<number, string> = new Map();
+    private currentFontFamily: string | null = null;
 
     constructor(context: Context, options: RenderConfigurations) {
         super(context, options);
         this.canvas = options.canvas ? options.canvas : document.createElement('canvas');
         // this.ctx = this.canvas.getContext('2d') as CanvasRenderingContext2D;
 
-        this.pxToPt = (px: number) => px * (72 / 96);
+        this.pxToPt = (px: number) => px * PT_TO_PX_RATIO;
         const pageWidth = this.pxToPt(options.width);
         const pageHeight = this.pxToPt(options.height);
         // if format is an array, convert px to pt
@@ -179,7 +190,7 @@ export class CanvasRenderer extends Renderer {
             encryption: options.encryption
         });
         this.context2dCtx = this.jspdfCtx.context2d as JsPdfContext2d;
-        this.context2dCtx.scale(0.75, 0.75);
+        this.context2dCtx.scale(PT_TO_PX_RATIO, PT_TO_PX_RATIO);
 
         this.context2dCtx.translate(-options.x, -options.y);
 
@@ -188,8 +199,9 @@ export class CanvasRenderer extends Renderer {
                 this.addFontToJsPDF();
             } catch (error) {
                 console.warn('Failed to set font:', error);
-                this.jspdfCtx.setFont('Helvetica');
+                this.jspdfCtx.setFont(DEFAULT_FALLBACK_FONT);
             }
+            this.buildFontMatchIndex();
         }
 
         if (!options.canvas) {
@@ -239,40 +251,53 @@ export class CanvasRenderer extends Renderer {
         this.context.logger.debug(`setFont renderer initialized`);
     }
 
-    // reset all font
+    // reset all font (only if current font family has changed)
     resetJsPDFFont(): void {
         if (isArray(this.options.fontConfig) && !isEmptyValue(this.options.fontConfig)) {
-            (this.options.fontConfig as FontConfig[]).forEach((v) => {
-                v.fontFamily && this.jspdfCtx.setFont(v.fontFamily);
-            });
+            const configs = this.options.fontConfig as FontConfig[];
+            const target = configs[0]?.fontFamily;
+            if (target && target !== this.currentFontFamily) {
+                this.jspdfCtx.setFont(target);
+                this.currentFontFamily = target;
+            }
         }
     }
-    // setFont form options
+    // setFont form options (with memoization)
     setTextFont(styles: CSSParsedDeclaration): string {
-        // console.log(styles.fontWeight, styles.fontStyle, styles.fontFamily, 'styles');
         if (isEmptyValue(this.options.fontConfig)) {
             return '';
         }
+        const cacheKey = `${styles.fontWeight}-${styles.fontStyle}-${styles.fontFamily.join(',')}`;
+        const cached = this.textFontCache.get(cacheKey);
+        if (cached !== undefined) {
+            if (cached) {
+                this.jspdfCtx.setFont(cached);
+            }
+            return cached;
+        }
+
         const fontConfigRef = this.options.fontConfig as FontConfig[];
-        // 处理字体图标场景
         const isIconFont = fontConfigRef.find((v) => v.iconFont);
         const otherFonts = fontConfigRef.filter((v) => !v.iconFont);
+        let result = '';
+
         if (isIconFont && styles.fontFamily.some((family) => family.includes(isIconFont.fontFamily))) {
-            isIconFont.fontFamily && this.jspdfCtx.setFont(isIconFont.fontFamily);
-            return isIconFont.fontFamily;
+            result = isIconFont.fontFamily ?? '';
+        } else if ((otherFonts as FontConfig[]).length === 1) {
+            result = otherFonts[0].fontFamily ?? '';
+        } else {
+            result =
+                otherFonts.find(
+                    (v) => v.fontWeight === (styles.fontWeight > 500 ? 700 : 400) && v.fontStyle === styles.fontStyle
+                )?.fontFamily ?? '';
         }
-        // 除开字体图标场景
-        if ((otherFonts as FontConfig[]).length === 1) {
-            const fontFamilyCustom = otherFonts[0].fontFamily ?? '';
-            fontFamilyCustom && this.jspdfCtx.setFont(fontFamilyCustom);
-            return fontFamilyCustom;
+
+        if (result) {
+            this.jspdfCtx.setFont(result);
+            this.currentFontFamily = result;
         }
-        const fontFamilyCustom =
-            otherFonts.find(
-                (v) => v.fontWeight === (styles.fontWeight > 500 ? 700 : 400) && v.fontStyle === styles.fontStyle
-            )?.fontFamily ?? '';
-        fontFamilyCustom && this.jspdfCtx.setFont(fontFamilyCustom);
-        return fontFamilyCustom;
+        this.textFontCache.set(cacheKey, result);
+        return result;
     }
 
     // 判断字符的 Unicode 编码是否在指定范围内
@@ -295,55 +320,75 @@ export class CanvasRenderer extends Renderer {
         return 'normal';
     }
 
-    // 根据样式设置匹配的字体（策略模式：单次循环按优先级匹配）
-    // 策略1: charRange 精确匹配（字符范围 + weight + style 都匹配）
-    // 策略2: default 精确匹配（默认字体 + weight + style 都匹配）
-    // 策略3: 无匹配，保留原字体
-    private setMatchedFont(text: TextBounds, styles: CSSParsedDeclaration): void {
-        const charCode = text.text.charCodeAt(0);
-
-        // 优先使用 langFontConfig
+    // 预构建字体匹配索引，避免每文本节点重复构建列表和线性扫描
+    private buildFontMatchIndex(): void {
+        this.fontMatchIndex.clear();
         const fontConfigList = this.options.langFontConfig
             ? this.options.langFontConfig
             : isArray(this.options.fontConfig)
             ? (this.options.fontConfig as FontConfig[])
             : [this.options.fontConfig as FontConfig];
 
-        const targetWeight = styles.fontWeight > 500 ? 700 : 400;
-        const targetStyle = styles.fontStyle === 'italic' ? 'italic' : 'normal';
-
-        let charRangeMatch: FontConfig | null = null;
-        let defaultMatch: FontConfig | null = null;
-
-        // 单次循环，同时收集两种策略的候选字体
+        const groups = new Map<string, FontConfig[]>();
         for (const config of fontConfigList) {
-            const isWeightMatch = config.fontWeight === targetWeight;
-            const isStyleMatch = config.fontStyle === targetStyle;
-
-            // 必须 weight 和 style 都匹配
-            if (isWeightMatch && isStyleMatch) {
-                // 策略1: charRange 匹配（优先级最高，找到就可以提前退出）
-                if (config.charRange && this.isCharInRange(charCode, config.charRange)) {
-                    charRangeMatch = config;
-                    break; // 找到最高优先级匹配，立即退出
-                }
-
-                // 策略2: default 匹配（记录但继续找更高优先级的）
-                if (config.isDefault && !defaultMatch) {
-                    defaultMatch = config;
-                }
+            const key = `${config.fontWeight}-${config.fontStyle}`;
+            const list = groups.get(key);
+            if (list) {
+                list.push(config);
+            } else {
+                groups.set(key, [config]);
             }
         }
+        // 每组内按优先级排序：charRange 优先，isDefault 次之
+        groups.forEach((list) => {
+            list.sort((a: FontConfig, b: FontConfig) => {
+                const aHasRange = a.charRange ? 1 : 0;
+                const bHasRange = b.charRange ? 1 : 0;
+                if (aHasRange !== bHasRange) return bHasRange - aHasRange;
+                const aDefault = a.isDefault ? 1 : 0;
+                const bDefault = b.isDefault ? 1 : 0;
+                return bDefault - aDefault;
+            });
+        });
+        this.fontMatchIndex = groups;
+    }
 
-        // 按优先级应用字体
-        const matchedConfig = charRangeMatch || defaultMatch;
+    // 根据样式设置匹配的字体（使用预构建索引 O(1) 查找）
+    private setMatchedFont(text: TextBounds, styles: CSSParsedDeclaration): void {
+        const charCode = text.text.charCodeAt(0);
+
+        const targetWeight = styles.fontWeight > 500 ? 700 : 400;
+        const targetStyle = styles.fontStyle === 'italic' ? 'italic' : 'normal';
+        const key = `${targetWeight}-${targetStyle}`;
+
+        const candidates = this.fontMatchIndex.get(key);
+        if (!candidates || candidates.length === 0) {
+            const combinedStyle = this.getCombinedFontStyle(styles.fontStyle, styles.fontWeight);
+            this.jspdfCtx.setFont(DEFAULT_FALLBACK_FONT, combinedStyle);
+            this.currentFontFamily = DEFAULT_FALLBACK_FONT;
+            return;
+        }
+
+        let matchedConfig: FontConfig | null = null;
+
+        for (const config of candidates) {
+            if (config.charRange && this.isCharInRange(charCode, config.charRange)) {
+                matchedConfig = config;
+                break;
+            }
+            if (config.isDefault && !matchedConfig) {
+                matchedConfig = config;
+            }
+        }
 
         if (matchedConfig) {
             const combinedStyle = this.getCombinedFontStyle(matchedConfig.fontStyle, matchedConfig.fontWeight);
             this.jspdfCtx.setFont(matchedConfig.fontFamily, combinedStyle);
+            this.currentFontFamily = matchedConfig.fontFamily;
         } else {
             const combinedStyle = this.getCombinedFontStyle(styles.fontStyle, styles.fontWeight);
-            this.jspdfCtx.setFont('Helvetica', combinedStyle);
+            this.jspdfCtx.setFont(DEFAULT_FALLBACK_FONT, combinedStyle);
+            this.currentFontFamily = DEFAULT_FALLBACK_FONT;
         }
     }
 
@@ -400,10 +445,6 @@ export class CanvasRenderer extends Renderer {
     }
 
     async renderNode(paint: ElementPaint): Promise<void> {
-        if (contains(paint.container.flags, FLAGS.DEBUG_RENDER)) {
-            debugger;
-        }
-
         if (paint.container.styles.isVisible()) {
             try {
                 await this.renderNodeBackgroundAndBorders(paint);
@@ -451,12 +492,16 @@ export class CanvasRenderer extends Renderer {
     }
 
     private convertColor(color: Color): string {
+        const cached = this.colorCache.get(color);
+        if (cached !== undefined) return cached;
         const r = 0xff & (color >>> 24);
         const g = 0xff & (color >>> 16);
         const b = 0xff & (color >>> 8);
-        return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b
+        const result = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b
             .toString(16)
             .padStart(2, '0')}`;
+        this.colorCache.set(color, result);
+        return result;
     }
 
     async renderTextNode(text: TextContainer, styles: CSSParsedDeclaration): Promise<void> {
@@ -494,7 +539,7 @@ export class CanvasRenderer extends Renderer {
                                 const y_underline = Math.round(textItem.bounds.top + baseline);
                                 const y_overline = Math.round(textItem.bounds.top);
                                 const y_line_through = Math.ceil(textItem.bounds.top + middle);
-                                const thickness = 1;
+                                const thickness = TEXT_DECORATION_THICKNESS;
 
                                 switch (textDecorationLine) {
                                     case TEXT_DECORATION_LINE.UNDERLINE:
@@ -551,7 +596,7 @@ export class CanvasRenderer extends Renderer {
             if (ctx) {
                 ctx.clearRect(0, 0, width, height);
                 ctx.drawImage(image, 0, 0, width, height);
-                const dataURL = canvas.toDataURL('image/png', 0.8);
+                const dataURL = canvas.toDataURL('image/png', IMAGE_QUALITY);
                 this.addImagePdf(dataURL, 'PNG', x, y, width, height);
             }
         } else {
@@ -568,13 +613,13 @@ export class CanvasRenderer extends Renderer {
         if (ctx) {
             ctx.clearRect(0, 0, width, height);
             ctx.drawImage(image, 0, 0, width, height);
-            const dataURL = canvas.toDataURL('image/png', 0.8);
+            const dataURL = canvas.toDataURL('image/png', IMAGE_QUALITY);
             this.addImagePdf(dataURL, 'PNG', x, y, width, height);
         }
     }
     renderReplacedJsPdfCanvasImage(container: CanvasElementContainer): void {
         const {x, y, width, height} = this.getPdfBounds(container);
-        const dataURL = container.canvas.toDataURL('image/png', 0.8);
+        const dataURL = container.canvas.toDataURL('image/png', IMAGE_QUALITY);
         this.addImagePdf(dataURL, 'PNG', x, y, width, height);
     }
 
@@ -594,7 +639,7 @@ export class CanvasRenderer extends Renderer {
                 const image = await this.context.cache.match(container.src);
                 this.renderReplacedJsPdfImage(container, image);
             } catch (e) {
-                this.context.logger.error(`Error loading image ${container}`);
+                this.context.logger.error(`Error loading image ${container}: ${e}`);
             }
         }
 
@@ -743,10 +788,6 @@ export class CanvasRenderer extends Renderer {
     }
 
     async renderStackContent(stack: StackingContext): Promise<void> {
-        if (contains(stack.element.container.flags, FLAGS.DEBUG_RENDER)) {
-            debugger;
-        }
-
         try {
             await this.renderNodeBackgroundAndBorders(stack.element);
         } catch (e) {
@@ -833,14 +874,18 @@ export class CanvasRenderer extends Renderer {
         const canvas = ownerDocument.createElement('canvas');
         canvas.width = Math.max(1, width);
         canvas.height = Math.max(1, height);
-        const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+            return image;
+        }
         ctx.drawImage(image, 0, 0, image.width, image.height, 0, 0, width, height);
         return canvas;
     }
 
     async renderBackgroundImage(container: ElementContainer): Promise<void> {
-        let index = container.styles.backgroundImage.length - 1;
-        for (const backgroundImage of container.styles.backgroundImage.slice(0).reverse()) {
+        const bgImages = container.styles.backgroundImage;
+        for (let index = bgImages.length - 1; index >= 0; index--) {
+            const backgroundImage = bgImages[index];
             // fix: background img render support gradient image-repeat
             if (backgroundImage.type === CSSImageType.URL) {
                 let image;
@@ -858,8 +903,8 @@ export class CanvasRenderer extends Renderer {
                         const canvas = ownerDocument.createElement('canvas');
                         canvas.width = Math.max(1, boxs.width);
                         canvas.height = Math.max(1, boxs.height);
-                        const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
-                        ctx.save();
+                        const ctx = canvas.getContext('2d');
+                        if (!ctx) return;
                         const repeatStr = getBackgroundRepeat(container.styles.backgroundRepeat[0]);
                         if (container.styles.backgroundRepeat[0] === BACKGROUND_REPEAT.NO_REPEAT) {
                             const xPt = this.pxToPt(x - this.options.x);
@@ -868,14 +913,13 @@ export class CanvasRenderer extends Renderer {
                             const heightPt = this.pxToPt(height);
                             this.addImagePdf(image, 'JPEG', xPt, yPt, widthPt, heightPt);
                         } else {
+                            ctx.save();
                             const resizeImg = this.resizeImage(image, width, height);
                             const pattern = ctx.createPattern(resizeImg, repeatStr) as CanvasPattern;
-                            // this.renderRepeat(boxs, ctx, path, pattern, x, y);
                             // need transformPath
                             const pathTs = transformPath(path, -x, -y, 0, 0);
                             this.renderRepeat(boxs, ctx, pathTs, pattern);
-                            const dataURL = canvas.toDataURL('image/jpeg', 0.8);
-                            // console.log(dataURL, 'dataURL', image)
+                            const dataURL = canvas.toDataURL('image/jpeg', IMAGE_QUALITY);
                             ctx.restore();
                             const xPt = this.pxToPt(boxs.left - this.options.x);
                             const yPt = this.pxToPt(boxs.top - this.options.y);
@@ -885,7 +929,7 @@ export class CanvasRenderer extends Renderer {
                         }
                     }
                 } catch (e) {
-                    this.context.logger.error(`Error loading background-image ${url}`);
+                    this.context.logger.error(`Error loading background-image ${url}: ${e}`);
                 }
             } else if (isLinearGradient(backgroundImage)) {
                 const [path, x, y, width, height] = calculateBackgroundRendering(container, index, [null, null, null]);
@@ -894,7 +938,8 @@ export class CanvasRenderer extends Renderer {
                 const canvas = document.createElement('canvas');
                 canvas.width = width;
                 canvas.height = height;
-                const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return;
                 const gradient = ctx.createLinearGradient(x0, y0, x1, y1);
 
                 processColorStops(backgroundImage.stops, lineLength).forEach((colorStop) =>
@@ -909,9 +954,7 @@ export class CanvasRenderer extends Renderer {
                     const pathTs = transformPath(path, -x, -y, 0, 0);
                     this.renderRepeat(boxs, ctx, pathTs, pattern);
                 }
-                const dataURL = canvas.toDataURL('image/jpeg', 0.8);
-                // console.log(dataURL, 'dataURL', image)
-                ctx.restore();
+                const dataURL = canvas.toDataURL('image/jpeg', IMAGE_QUALITY);
                 const xPt = this.pxToPt(x - this.options.x);
                 const yPt = this.pxToPt(y - this.options.y);
                 const widthPt = this.pxToPt(width);
@@ -932,7 +975,8 @@ export class CanvasRenderer extends Renderer {
                 const canvas = ownerDocument.createElement('canvas');
                 canvas.width = Math.max(1, width);
                 canvas.height = Math.max(1, height);
-                const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return;
                 if (rx > 0 && ry > 0) {
                     const radialGradient = ctx.createRadialGradient(x, y, 0, x, y, rx);
                     processColorStops(backgroundImage.stops, rx * 2).forEach((colorStop) =>
@@ -962,14 +1006,13 @@ export class CanvasRenderer extends Renderer {
                         ctx.fill();
                     }
                 }
-                const dataURL = canvas.toDataURL('image/jpeg', 0.8);
+                const dataURL = canvas.toDataURL('image/jpeg', IMAGE_QUALITY);
                 const xPt = this.pxToPt(left - this.options.x);
                 const yPt = this.pxToPt(top - this.options.y);
                 const widthPt = this.pxToPt(width);
                 const heightPt = this.pxToPt(height);
                 this.addImagePdf(dataURL, 'JPEG', xPt, yPt, widthPt, heightPt);
             }
-            index--;
         }
     }
 
@@ -977,7 +1020,7 @@ export class CanvasRenderer extends Renderer {
         this.path(parsePathForBorder(curvePoints, side));
         this.context2dCtx.fillStyle = this.convertColor(color);
         this.jspdfCtx.fill();
-        this.context2dCtx.fill();
+        this.context2dCtx.fill(); // both fills required: jspdfCtx.fill() for PDF output, context2dCtx.fill() for canvas
     }
 
     renderDoubleBorder(color: Color, width: number, side: number, curvePoints: BoundCurves): void {
@@ -1153,7 +1196,7 @@ export class CanvasRenderer extends Renderer {
             this.context2dCtx.lineCap = 'round';
             this.context2dCtx.lineWidth = width;
         } else {
-            this.context2dCtx.lineWidth = width * 2 + 1.1;
+            this.context2dCtx.lineWidth = width * 2 + DASHED_LINE_WIDTH_ADJUST;
         }
         this.context2dCtx.strokeStyle = asString(color);
         this.context2dCtx.stroke();
@@ -1186,7 +1229,7 @@ export class CanvasRenderer extends Renderer {
 
     private resetPageDecorationFont(text: string): void {
         if (/^[\x00-\x7F]*$/.test(text)) {
-            this.jspdfCtx.setFont('Helvetica', 'normal');
+            this.jspdfCtx.setFont(DEFAULT_FALLBACK_FONT, 'normal');
             return;
         }
 
@@ -1209,7 +1252,7 @@ export class CanvasRenderer extends Renderer {
             return;
         }
 
-        this.jspdfCtx.setFont('Helvetica', 'normal');
+        this.jspdfCtx.setFont(DEFAULT_FALLBACK_FONT, 'normal');
     }
 
     async renderPage(element: ElementContainer, pageNum: number): Promise<void> {
@@ -1345,7 +1388,7 @@ export class CanvasRenderer extends Renderer {
         area: 'header' | 'footer',
         paddingPx?: [number, number, number, number]
     ): {x: number; y: number; align: 'left' | 'center' | 'right'} {
-        const [pt, pr, pb, pl] = (paddingPx ?? [24, 24, 24, 24]).map((v) => this.pxToPt(v));
+        const [pt, pr, pb, pl] = (paddingPx ?? DEFAULT_PAGE_DECORATION_PADDING).map((v) => this.pxToPt(v));
         const areaHPt = this.pxToPt(areaH);
         if (Array.isArray(pos) && pos.length >= 2) {
             return {x: this.pxToPt(pos[0]), y: this.pxToPt(pos[1]), align: 'left'};
@@ -1440,10 +1483,10 @@ const canvasTextAlign = (textAlign: TEXT_ALIGN): CanvasTextAlign => {
 };
 
 // see https://github.com/niklasvh/html2canvas/pull/2645
-const iOSBrokenFonts = ['-apple-system', 'system-ui'];
+const iOSBrokenFontsSet = new Set(['-apple-system', 'system-ui']);
 
 const fixIOSSystemFonts = (fontFamilies: string[]): string[] => {
-    return /iPhone OS 15_(0|1)/.test(window.navigator.userAgent)
-        ? fontFamilies.filter((fontFamily) => iOSBrokenFonts.indexOf(fontFamily) === -1)
+    return /iPhone OS 15_(0|1)/.test(window.navigator?.userAgent ?? '')
+        ? fontFamilies.filter((fontFamily) => !iOSBrokenFontsSet.has(fontFamily))
         : fontFamilies;
 };
