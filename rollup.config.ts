@@ -50,7 +50,7 @@ const umdConfig = {
             })],
         },
     ],
-    external: [],
+    external: ['canvg', 'dompurify'],
     plugins: sharedPlugins(),
 };
 
@@ -64,7 +64,7 @@ const esmConfig = {
         banner,
         sourcemap: true,
     },
-    external: [],
+    external: ['canvg', 'dompurify'],
     watch: {
         include: 'src/**',
     },
