@@ -3,8 +3,7 @@ import json from '@rollup/plugin-json';
 import resolve from '@rollup/plugin-node-resolve';
 import typescript from '@rollup/plugin-typescript';
 import sourceMaps from 'rollup-plugin-sourcemaps';
-// const serve = require('rollup-plugin-serve')
-// const livereload = require('rollup-plugin-livereload')
+import {terser} from 'rollup-plugin-terser';
 
 const pkg = require('./package.json');
 
@@ -14,43 +13,62 @@ const banner = `/*!
  * Released under ${pkg.license} License
  */`;
 
-export default {
+const sharedPlugins = (tsOptions = {}) => [
+    resolve({
+        exportConditions: ['browser', 'module', 'import', 'default']
+    }),
+    json(),
+    typescript({ sourceMap: true, inlineSources: true, ...tsOptions }),
+    commonjs({
+        include: 'node_modules/**',
+    }),
+    sourceMaps(),
+];
+
+// UMD builds: single-file, inline dynamic imports (UMD does not support code-splitting)
+const umdConfig = {
     input: `src/index.ts`,
     output: [
-        { file: pkg.main, name: 'dompdf', format: 'umd', banner, sourcemap: true, inlineDynamicImports: true},
-        { file: pkg.module, format: 'esm', banner, sourcemap: true,inlineDynamicImports: true},
-        
+        {
+            file: pkg.main,
+            name: 'dompdf',
+            format: 'umd',
+            banner,
+            sourcemap: true,
+            inlineDynamicImports: true,
+        },
+        {
+            file: 'dist/dompdf.min.js',
+            name: 'dompdf',
+            format: 'umd',
+            banner,
+            sourcemap: true,
+            inlineDynamicImports: true,
+            plugins: [terser({
+                compress: {drop_console: false, passes: 2},
+                format: {comments: /^!/},
+            })],
+        },
     ],
+    external: [],
+    plugins: sharedPlugins(),
+};
+
+// ESM build: supports code-splitting, snapdom loaded as a separate chunk
+const esmConfig = {
+    input: `src/index.ts`,
+    output: {
+        dir: 'dist/esm',
+        format: 'esm',
+        entryFileNames: 'dompdf.esm.js',
+        banner,
+        sourcemap: true,
+    },
     external: [],
     watch: {
         include: 'src/**',
     },
-    plugins: [
-        // Allow node_modules resolution, so you can use 'external' to control
-        // which external modules to include in the bundle
-        // https://github.com/rollup/rollup-plugin-node-resolve#usage
-        resolve({
-            exportConditions: ['browser', 'module', 'import', 'default']
-        }),
-        // Allow json resolution
-        json(),
-        // Compile TypeScript files
-        typescript({ sourceMap: true, inlineSources: true }),
-        // Allow bundling cjs modules (unlike webpack, rollup doesn't understand cjs)
-        commonjs({
-            include: 'node_modules/**',
-            
-        }),
-        // serve({
-        //     port: 8090,
-        //     open: true,
-        //     // 依赖的文件夹
-        //     contentBase: './build'
-        //   }),
+    plugins: sharedPlugins({outDir: 'dist/esm', declaration: false, declarationDir: undefined}),
+};
 
-        //   livereload(),
-
-        // Resolve source maps to the original source
-        sourceMaps(),
-    ],
-}
+export default [umdConfig, esmConfig];

@@ -1,4 +1,3 @@
-import {snapdom} from '@zumer/snapdom';
 import {Context} from '../core/context';
 import {CSSParsedDeclaration} from '../css';
 import {ElementContainer, FLAGS} from './element-container';
@@ -209,6 +208,7 @@ const makeInvisible = async (element: Element) => {
 };
 
 const renderForeignObject = async (element: HTMLElement) => {
+    const {snapdom} = await import('@zumer/snapdom');
     // 复制一份node节点
     const captureElement = element as HTMLElement;
 

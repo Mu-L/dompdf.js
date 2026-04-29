@@ -1,5 +1,4 @@
 import {Context2d, EncryptionOptions, jsPDF} from 'jspdf';
-import 'jspdf/dist/polyfills.es.js';
 import {contains} from '../../core/bitwise';
 import {Context} from '../../core/context';
 import {CSSParsedDeclaration} from '../../css';
