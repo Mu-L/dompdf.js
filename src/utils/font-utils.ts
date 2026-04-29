@@ -82,10 +82,10 @@ export function validateFontConfig(fontConfig: FontConfig | FontConfig[] | undef
             }
         }
 
-        // check: default must be boolean
-        if (config.default !== undefined && typeof config.default !== 'boolean') {
+        // check: isDefault must be boolean
+        if (config.isDefault !== undefined && typeof config.isDefault !== 'boolean') {
             console.error(
-                `The field default has a type error. Expected boolean, but received ${typeof config.default}`
+                `The field isDefault has a type error. Expected boolean, but received ${typeof config.isDefault}`
             );
             return false;
         }

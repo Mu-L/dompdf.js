@@ -45,7 +45,7 @@ const umdConfig = {
             sourcemap: true,
             inlineDynamicImports: true,
             plugins: [terser({
-                compress: {drop_console: false, passes: 2},
+                compress: {drop_console: true, passes: 2},
                 format: {comments: /^!/},
             })],
         },

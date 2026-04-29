@@ -663,6 +663,7 @@
         </div>
 
         <script type="text/javascript" src="../dist/dompdf.js"></script>
+        <!-- <script src="https://cdn.jsdelivr.net/npm/dompdf.js@v1.3.0/dist/dompdf.js"></script> -->
         <script type="text/javascript" src="./SourceHanSansCNRegularItalic-normal.js"></script>
         <script type="text/javascript" src="./SourceHanSansCNBold-bold.js"></script>
         <script type="text/javascript" src="./SourceHanSansCNNormal-normal.js"></script>
@@ -751,19 +752,22 @@
                             header: {
                                 content: (dompdf, pageNum) => {
                                     // 可以直接调用 dompdf.jspdfCtx 的任意 API
-                                    console.log(dompdf,pageNum,'pdf,pageNum');
+                                    console.log(dompdf, pageNum, 'pdf,pageNum');
                                 },
                                 height: 50
                             },
                             footer: {
-                                content: '',
-                                height: 0,
+                                content: 'Page ${currentPage} / ${totalPages}',
+                                height: 50,
                                 contentColor: '#333333',
-                                contentFontSize: 0,
+                                contentFontSize: 12,
                                 contentPosition: 'center',
                                 padding: [0, 0, 0, 0]
                             }
+
+                           
                         },
+
                         onJspdfReady(jspdf) {
                             // 设置 pdf 基本信息
                             jspdf.setDocumentProperties({
@@ -852,4 +856,3 @@
         </script>
     </body>
 </html>
-

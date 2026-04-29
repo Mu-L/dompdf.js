@@ -252,7 +252,7 @@ const renderElement = async (element: HTMLElement, opts: Partial<Options>): Prom
         if (isFunction(opts.onJspdfFinish)) {
             opts.onJspdfFinish(renderer.jspdfCtx);
         }
-        canvas = await renderer.output();
+        canvas = renderer.output();
     }
 
     if (opts.removeContainer ?? true) {

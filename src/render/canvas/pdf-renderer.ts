@@ -54,43 +54,28 @@ export type RenderConfigurations = RenderOptions & {
     langFontConfig?: FontConfig[];
 };
 
+export type pageSectionConfig = {
+    content: string | ((renderer: CanvasRenderer, pageNum: string) => void);
+    height: number;
+    contentPosition:
+        | 'center'
+        | 'centerLeft'
+        | 'centerRight'
+        | 'centerTop'
+        | 'centerBottom'
+        | 'leftTop'
+        | 'leftBottom'
+        | 'rightTop'
+        | 'rightBottom'
+        | [number, number];
+    contentColor: string;
+    contentFontSize: number;
+    padding?: [number, number, number, number];
+};
+
 export type pageConfigOptions = {
-    header: {
-        content: string | ((renderer: any, pageNum: string) => void);
-        height: number;
-        contentPosition:
-            | 'center'
-            | 'centerLeft'
-            | 'centerRight'
-            | 'centerTop'
-            | 'centerBottom'
-            | 'leftTop'
-            | 'leftBottom'
-            | 'rightTop'
-            | 'rightBottom'
-            | [number, number];
-        contentColor: string;
-        contentFontSize: number;
-        padding?: [number, number, number, number];
-    };
-    footer: {
-        content: string | ((renderer: any, pageNum: string) => void);
-        height: number;
-        contentPosition:
-            | 'center'
-            | 'centerLeft'
-            | 'centerRight'
-            | 'centerTop'
-            | 'centerBottom'
-            | 'leftTop'
-            | 'leftBottom'
-            | 'rightTop'
-            | 'rightBottom'
-            | [number, number];
-        contentColor: string;
-        contentFontSize: number;
-        padding?: [number, number, number, number];
-    };
+    header: pageSectionConfig;
+    footer: pageSectionConfig;
 };
 
 export interface RenderOptions {
@@ -406,7 +391,11 @@ export class CanvasRenderer extends Renderer {
     async renderStack(stack: StackingContext): Promise<void> {
         const styles = stack.element.container.styles;
         if (styles.isVisible()) {
-            await this.renderStackContent(stack);
+            try {
+                await this.renderStackContent(stack);
+            } catch (e) {
+                this.context.logger.error(`Error rendering stacking context: ${e}`);
+            }
         }
     }
 
@@ -416,8 +405,12 @@ export class CanvasRenderer extends Renderer {
         }
 
         if (paint.container.styles.isVisible()) {
-            await this.renderNodeBackgroundAndBorders(paint);
-            await this.renderNodeContent(paint);
+            try {
+                await this.renderNodeBackgroundAndBorders(paint);
+                await this.renderNodeContent(paint);
+            } catch (e) {
+                this.context.logger.error(`Error rendering node: ${e}`);
+            }
         }
     }
 
@@ -458,18 +451,12 @@ export class CanvasRenderer extends Renderer {
     }
 
     private convertColor(color: Color): string {
-        if (isTransparent(color)) {
-            return '#FFFFFF';
-        }
-
-        const r = 0xff & (color >> 24);
-        const g = 0xff & (color >> 16);
-        const b = 0xff & (color >> 8);
+        const r = 0xff & (color >>> 24);
+        const g = 0xff & (color >>> 16);
+        const b = 0xff & (color >>> 8);
         return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b
             .toString(16)
             .padStart(2, '0')}`;
-
-        // return asString(color);
     }
 
     async renderTextNode(text: TextContainer, styles: CSSParsedDeclaration): Promise<void> {
@@ -543,12 +530,18 @@ export class CanvasRenderer extends Renderer {
         });
     }
 
-    renderReplacedJsPdfImage(container: ImageElementContainer, image: HTMLImageElement | HTMLCanvasElement): void {
+    private getPdfBounds(container: ElementContainer): {x: number; y: number; width: number; height: number} {
         const bounds = contentBox(container);
-        const x = this.pxToPt(bounds.left - this.options.x);
-        const y = this.pxToPt(bounds.top - this.options.y);
-        const width = this.pxToPt(bounds.width);
-        const height = this.pxToPt(bounds.height);
+        return {
+            x: this.pxToPt(bounds.left - this.options.x),
+            y: this.pxToPt(bounds.top - this.options.y),
+            width: this.pxToPt(bounds.width),
+            height: this.pxToPt(bounds.height)
+        };
+    }
+
+    renderReplacedJsPdfImage(container: ImageElementContainer, image: HTMLImageElement | HTMLCanvasElement): void {
+        const {x, y, width, height} = this.getPdfBounds(container);
         // fix: url is svg image export
         if (getImageTypeByPath(container.src, 'svg')) {
             const canvas = document.createElement('canvas');
@@ -566,11 +559,7 @@ export class CanvasRenderer extends Renderer {
         }
     }
     renderReplacedJsPdfSvg(container: SVGElementContainer, image: HTMLImageElement | HTMLCanvasElement): void {
-        const bounds = contentBox(container);
-        const x = this.pxToPt(bounds.left - this.options.x);
-        const y = this.pxToPt(bounds.top - this.options.y);
-        const width = this.pxToPt(bounds.width);
-        const height = this.pxToPt(bounds.height);
+        const {x, y, width, height} = this.getPdfBounds(container);
 
         const canvas = document.createElement('canvas');
         canvas.width = width;
@@ -584,11 +573,7 @@ export class CanvasRenderer extends Renderer {
         }
     }
     renderReplacedJsPdfCanvasImage(container: CanvasElementContainer): void {
-        const bounds = contentBox(container);
-        const x = this.pxToPt(bounds.left - this.options.x);
-        const y = this.pxToPt(bounds.top - this.options.y);
-        const width = this.pxToPt(bounds.width);
-        const height = this.pxToPt(bounds.height);
+        const {x, y, width, height} = this.getPdfBounds(container);
         const dataURL = container.canvas.toDataURL('image/png', 0.8);
         this.addImagePdf(dataURL, 'PNG', x, y, width, height);
     }
@@ -762,11 +747,20 @@ export class CanvasRenderer extends Renderer {
             debugger;
         }
 
-        await this.renderNodeBackgroundAndBorders(stack.element);
+        try {
+            await this.renderNodeBackgroundAndBorders(stack.element);
+        } catch (e) {
+            this.context.logger.error(`Error rendering stack element background: ${e}`);
+        }
+
         for (const child of stack.negativeZIndex) {
             await this.renderStack(child);
         }
-        await this.renderNodeContent(stack.element);
+        try {
+            await this.renderNodeContent(stack.element);
+        } catch (e) {
+            this.context.logger.error(`Error rendering stack element content: ${e}`);
+        }
 
         for (const child of stack.nonInlineLevel) {
             await this.renderNode(child);
@@ -786,17 +780,6 @@ export class CanvasRenderer extends Renderer {
         for (const child of stack.positiveZIndex) {
             await this.renderStack(child);
         }
-    }
-
-    mask(paths: Path[]): void {
-        this.context2dCtx.beginPath();
-        this.context2dCtx.moveTo(0, 0);
-        this.context2dCtx.lineTo(this.options.width, 0);
-        this.context2dCtx.lineTo(this.options.width, this.options.height);
-        this.context2dCtx.lineTo(0, this.options.height);
-        this.context2dCtx.lineTo(0, 0);
-        this.formatPath(paths.slice(0).reverse());
-        this.context2dCtx.closePath();
     }
 
     path(paths: Path[], ctx2d?: Context2d | CanvasRenderingContext2D): void {
@@ -835,14 +818,10 @@ export class CanvasRenderer extends Renderer {
         path: Path[],
         pattern: CanvasPattern | CanvasGradient
     ): void {
-        // renderRepeat(boxs: Bounds, ctx: CanvasRenderingContext2D, path: Path[], pattern: CanvasPattern | CanvasGradient, offsetX: number, offsetY: number): void {
         const contextCtx = ctx;
         this.path(path, contextCtx);
         contextCtx.fillStyle = pattern;
-        contextCtx.translate(0, 0);
-        // contextCtx.fill();
-        contextCtx.fillRect(0, 0, boxs.width, boxs.height); // 绘制填充矩形（此时坐标系已偏移）
-        contextCtx.translate(-0, -0);
+        contextCtx.fillRect(0, 0, boxs.width, boxs.height);
     }
 
     resizeImage(image: HTMLImageElement, width: number, height: number): HTMLCanvasElement | HTMLImageElement {
@@ -994,16 +973,16 @@ export class CanvasRenderer extends Renderer {
         }
     }
 
-    async renderSolidBorder(color: Color, side: number, curvePoints: BoundCurves): Promise<void> {
+    renderSolidBorder(color: Color, side: number, curvePoints: BoundCurves): void {
         this.path(parsePathForBorder(curvePoints, side));
         this.context2dCtx.fillStyle = this.convertColor(color);
         this.jspdfCtx.fill();
         this.context2dCtx.fill();
     }
 
-    async renderDoubleBorder(color: Color, width: number, side: number, curvePoints: BoundCurves): Promise<void> {
+    renderDoubleBorder(color: Color, width: number, side: number, curvePoints: BoundCurves): void {
         if (width < 3) {
-            await this.renderSolidBorder(color, side, curvePoints);
+            this.renderSolidBorder(color, side, curvePoints);
             return;
         }
 
@@ -1035,28 +1014,33 @@ export class CanvasRenderer extends Renderer {
         );
         const foreignobjectrendering = paint.container.foreignobjectrendering;
         if (hasBackground || styles.boxShadow.length) {
-            // console.log('render getFont', this.jspdfCtx.getFont());
             if (!foreignobjectrendering) {
                 this.context2dCtx.save();
-                this.path(backgroundPaintingArea);
-                this.context2dCtx.clip();
+                try {
+                    this.path(backgroundPaintingArea);
+                    this.context2dCtx.clip();
 
-                if (!isTransparent(styles.backgroundColor)) {
-                    this.context2dCtx.fillStyle = this.convertColor(styles.backgroundColor);
-                    this.context2dCtx.fill();
+                    if (!isTransparent(styles.backgroundColor)) {
+                        this.context2dCtx.fillStyle = this.convertColor(styles.backgroundColor);
+                        this.context2dCtx.fill();
+                    }
+
+                    await this.renderBackgroundImage(paint.container);
+                } catch (e) {
+                    this.context.logger.error(`Error rendering background: ${e}`);
+                } finally {
+                    this.context2dCtx.restore();
                 }
+            } else {
+                await this.renderBackgroundImage(paint.container);
             }
-
-            await this.renderBackgroundImage(paint.container);
-
-            this.context2dCtx.restore();
             this.resetJsPDFFont();
         }
         let side = 0;
         for (const border of borders) {
             if (border.style !== BORDER_STYLE.NONE && !isTransparent(border.color) && border.width > 0) {
                 if (border.style === BORDER_STYLE.DASHED) {
-                    await this.renderDashedDottedBorder(
+                    this.renderDashedDottedBorder(
                         border.color,
                         border.width,
                         side,
@@ -1064,7 +1048,7 @@ export class CanvasRenderer extends Renderer {
                         BORDER_STYLE.DASHED
                     );
                 } else if (border.style === BORDER_STYLE.DOTTED) {
-                    await this.renderDashedDottedBorder(
+                    this.renderDashedDottedBorder(
                         border.color,
                         border.width,
                         side,
@@ -1072,27 +1056,31 @@ export class CanvasRenderer extends Renderer {
                         BORDER_STYLE.DOTTED
                     );
                 } else if (border.style === BORDER_STYLE.DOUBLE) {
-                    await this.renderDoubleBorder(border.color, border.width, side, paint.curves);
+                    this.renderDoubleBorder(border.color, border.width, side, paint.curves);
                 } else {
                     if (!foreignobjectrendering) {
-                        await this.renderSolidBorder(border.color, side, paint.curves);
+                        this.renderSolidBorder(border.color, side, paint.curves);
                     }
                 }
             }
             side++;
         }
     }
-    async renderDashedDottedBorder(
+    renderDashedDottedBorder(
         color: Color,
         width: number,
         side: number,
         curvePoints: BoundCurves,
         style: BORDER_STYLE
-    ): Promise<void> {
+    ): void {
         this.context2dCtx.save();
 
         const strokePaths = parsePathForBorderStroke(curvePoints, side);
         const boxPaths = parsePathForBorder(curvePoints, side);
+        if (boxPaths.length < 2) {
+            this.context2dCtx.restore();
+            return;
+        }
 
         if (style === BORDER_STYLE.DASHED) {
             this.path(boxPaths);
@@ -1173,14 +1161,14 @@ export class CanvasRenderer extends Renderer {
 
         // dashed round edge gap
         if (style === BORDER_STYLE.DASHED) {
-            if (isBezierCurve(boxPaths[0])) {
+            if (boxPaths.length >= 4 && isBezierCurve(boxPaths[0])) {
                 const path1 = boxPaths[3] as BezierCurve;
                 const path2 = boxPaths[0] as BezierCurve;
                 this.context2dCtx.beginPath();
                 this.formatPath([new Vector(path1.end.x, path1.end.y), new Vector(path2.start.x, path2.start.y)]);
                 this.context2dCtx.stroke();
             }
-            if (isBezierCurve(boxPaths[1])) {
+            if (boxPaths.length >= 3 && isBezierCurve(boxPaths[1])) {
                 const path1 = boxPaths[1] as BezierCurve;
                 const path2 = boxPaths[2] as BezierCurve;
                 this.context2dCtx.beginPath();
@@ -1191,10 +1179,39 @@ export class CanvasRenderer extends Renderer {
 
         this.context2dCtx.restore();
     }
-    async addPage(offsetY: number): Promise<void> {
+    addPage(offsetY: number): void {
         this.context2dCtx.translate(0, -offsetY);
         this.jspdfCtx.addPage();
     }
+
+    private resetPageDecorationFont(text: string): void {
+        if (/^[\x00-\x7F]*$/.test(text)) {
+            this.jspdfCtx.setFont('Helvetica', 'normal');
+            return;
+        }
+
+        if (this.options.langFontConfig && this.options.langFontConfig.length > 0) {
+            const defaultFont =
+                this.options.langFontConfig.find((config) => config.isDefault) ?? this.options.langFontConfig[0];
+            const combinedStyle = this.getCombinedFontStyle(defaultFont.fontStyle, defaultFont.fontWeight);
+            this.jspdfCtx.setFont(defaultFont.fontFamily, combinedStyle);
+            return;
+        }
+
+        if (!isEmptyValue(this.options.fontConfig)) {
+            const fontConfigRef = this.options.fontConfig as FontConfig[];
+            const defaultFont =
+                fontConfigRef.find((config) => config.isDefault && !config.iconFont) ??
+                fontConfigRef.find((config) => !config.iconFont && config.fontWeight === 400 && config.fontStyle === 'normal') ??
+                fontConfigRef.find((config) => !config.iconFont) ??
+                fontConfigRef[0];
+            this.jspdfCtx.setFont(defaultFont.fontFamily, 'normal');
+            return;
+        }
+
+        this.jspdfCtx.setFont('Helvetica', 'normal');
+    }
+
     async renderPage(element: ElementContainer, pageNum: number): Promise<void> {
         const cfg = this.options.pageConfig;
         const pageW = this.jspdfCtx.internal.pageSize.getWidth();
@@ -1211,9 +1228,14 @@ export class CanvasRenderer extends Renderer {
             this.jspdfCtx.rect(bx, by, bw, bh, 'F');
         }
 
-        const stack = parseStackingContexts(element);
-        await this.renderStack(stack);
-        this.applyEffects([]);
+        this.jspdfCtx.saveGraphicsState();
+        try {
+            const stack = parseStackingContexts(element);
+            await this.renderStack(stack);
+        } finally {
+            this.applyEffects([]);
+            this.jspdfCtx.restoreGraphicsState();
+        }
 
         if (cfg?.header) {
             if (typeof cfg.header.content === 'function') {
@@ -1222,6 +1244,7 @@ export class CanvasRenderer extends Renderer {
                 const headerText = String(cfg.header.content)
                     .replace('${currentPage}', String(pageNum))
                     .replace('${totalPages}', String(this.totalPages));
+                this.resetPageDecorationFont(headerText);
                 this.jspdfCtx.setFontSize(this.safe(this.pxToPt(cfg.header.contentFontSize), 1));
                 this.setTextColorFromString(cfg.header.contentColor);
                 const headerPos = this.computeContentPosition(
@@ -1245,6 +1268,7 @@ export class CanvasRenderer extends Renderer {
                 const footerText = String(cfg.footer.content)
                     .replace('${currentPage}', String(pageNum))
                     .replace('${totalPages}', String(this.totalPages));
+                this.resetPageDecorationFont(footerText);
                 this.jspdfCtx.setFontSize(this.safe(this.pxToPt(cfg.footer.contentFontSize), 1));
                 this.setTextColorFromString(cfg.footer.contentColor);
                 const footerPos = this.computeContentPosition(
@@ -1323,65 +1347,36 @@ export class CanvasRenderer extends Renderer {
     ): {x: number; y: number; align: 'left' | 'center' | 'right'} {
         const [pt, pr, pb, pl] = (paddingPx ?? [24, 24, 24, 24]).map((v) => this.pxToPt(v));
         const areaHPt = this.pxToPt(areaH);
-        const mtPt = this.pxToPt(mt);
-        const mbPt = this.pxToPt(mb);
         if (Array.isArray(pos) && pos.length >= 2) {
             return {x: this.pxToPt(pos[0]), y: this.pxToPt(pos[1]), align: 'left'};
         }
-        if (area === 'header') {
-            switch (pos) {
-                case 'center':
-                    return {
-                        x: pageW / 2,
-                        y: mtPt + pt + (areaHPt - pt - pb) / 2,
-                        align: 'center'
-                    };
-                case 'centerLeft':
-                    return {x: pl, y: mtPt + pt + (areaHPt - pt - pb) / 2, align: 'left'};
-                case 'centerRight':
-                    return {x: pageW - pr, y: mtPt + pt + (areaHPt - pt - pb) / 2, align: 'right'};
-                case 'centerTop':
-                    return {x: pageW / 2, y: mtPt + pt, align: 'center'};
-                case 'centerBottom':
-                    return {x: pageW / 2, y: mtPt + areaHPt - pb, align: 'center'};
-                case 'leftTop':
-                    return {x: pl, y: mtPt + pt, align: 'left'};
-                case 'leftBottom':
-                    return {x: pl, y: mtPt + areaHPt - pb, align: 'left'};
-                case 'rightTop':
-                    return {x: pageW - pr, y: mtPt + pt, align: 'right'};
-                case 'rightBottom':
-                    return {x: pageW - pr, y: mtPt + areaHPt - pb, align: 'right'};
-                default:
-                    return {x: pl, y: mtPt + pt, align: 'left'};
-            }
-        } else {
-            switch (pos) {
-                case 'center':
-                    return {
-                        x: pageW / 2,
-                        y: pageH - mbPt - areaHPt + pt + (areaHPt - pt - pb) / 2,
-                        align: 'center'
-                    };
-                case 'centerLeft':
-                    return {x: pl, y: pageH - mbPt - areaHPt + pt + (areaHPt - pt - pb) / 2, align: 'left'};
-                case 'centerRight':
-                    return {x: pageW - pr, y: pageH - mbPt - areaHPt + pt + (areaHPt - pt - pb) / 2, align: 'right'};
-                case 'centerTop':
-                    return {x: pageW / 2, y: pageH - mbPt - areaHPt + pt, align: 'center'};
-                case 'centerBottom':
-                    return {x: pageW / 2, y: pageH - mbPt - pb, align: 'center'};
-                case 'leftTop':
-                    return {x: pl, y: pageH - mbPt - areaHPt + pt, align: 'left'};
-                case 'leftBottom':
-                    return {x: pl, y: pageH - mbPt - pb, align: 'left'};
-                case 'rightTop':
-                    return {x: pageW - pr, y: pageH - mbPt - areaHPt + pt, align: 'right'};
-                case 'rightBottom':
-                    return {x: pageW - pr, y: pageH - mbPt - pb, align: 'right'};
-                default:
-                    return {x: pl, y: pageH - mbPt - pb, align: 'left'};
-            }
+        const mtPt = this.pxToPt(mt);
+        const mbPt = this.pxToPt(mb);
+        const yBase = area === 'header' ? mtPt : pageH - mbPt - areaHPt;
+
+        switch (pos) {
+            case 'center':
+                return {x: pageW / 2, y: yBase + pt + (areaHPt - pt - pb) / 2, align: 'center'};
+            case 'centerLeft':
+                return {x: pl, y: yBase + pt + (areaHPt - pt - pb) / 2, align: 'left'};
+            case 'centerRight':
+                return {x: pageW - pr, y: yBase + pt + (areaHPt - pt - pb) / 2, align: 'right'};
+            case 'centerTop':
+                return {x: pageW / 2, y: yBase + pt, align: 'center'};
+            case 'centerBottom':
+                return {x: pageW / 2, y: yBase + areaHPt - pb, align: 'center'};
+            case 'leftTop':
+                return {x: pl, y: yBase + pt, align: 'left'};
+            case 'leftBottom':
+                return {x: pl, y: yBase + areaHPt - pb, align: 'left'};
+            case 'rightTop':
+                return {x: pageW - pr, y: yBase + pt, align: 'right'};
+            case 'rightBottom':
+                return {x: pageW - pr, y: yBase + areaHPt - pb, align: 'right'};
+            default:
+                return area === 'header'
+                    ? {x: pl, y: yBase + pt, align: 'left'}
+                    : {x: pl, y: yBase + areaHPt - pb, align: 'left'};
         }
     }
 
@@ -1401,7 +1396,7 @@ export class CanvasRenderer extends Renderer {
         this.jspdfCtx.addImage(img, format, sx, sy, sw, sh, '', 'FAST');
     }
 
-    async output(): Promise<Blob> {
+    output(): Blob {
         const pdfBlob = this.jspdfCtx.output('blob');
         return pdfBlob;
     }

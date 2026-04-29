@@ -1,5 +1,5 @@
 import {Context} from '../../core/context';
-import {createForeignObjectSVG} from '../../core/features';
+import {createForeignObjectSVG, loadSerializedSVG} from '../../core/features';
 import {asString} from '../../css/types/color';
 import {Renderer} from '../renderer';
 import {RenderConfigurations} from './pdf-renderer';
@@ -47,14 +47,3 @@ export class ForeignObjectRenderer extends Renderer {
         return this.canvas;
     }
 }
-
-export const loadSerializedSVG = (svg: Node): Promise<HTMLImageElement> =>
-    new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => {
-            resolve(img);
-        };
-        img.onerror = reject;
-
-        img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`;
-    });
