@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.3.1](https://github.com/lmn1919/dompdf.js/compare/v1.3.0...v1.3.1) (2026-05-08)
+
+
+### ✨ Feature
+
+* Add the tags command ([78b473d](https://github.com/lmn1919/dompdf.js/commit/78b473d37e93a08e86fd92d45e5fa73234e13917))
+* Optimize pagination code ([653e0e6](https://github.com/lmn1919/dompdf.js/commit/653e0e6b0782b4c4aeffb9cf48869f8dd5a7bc97))
+* Optimize pdf-renderer code ([6093c8c](https://github.com/lmn1919/dompdf.js/commit/6093c8cf1b0ae645b80a38825d4862e80ff6e5c3))
+* Optimize pdf-renderer code and fix the issue where custom headers and footers cannot be rendered properly. ([3c7fc89](https://github.com/lmn1919/dompdf.js/commit/3c7fc8910030a3e2c8a3519303680922ebb69e6a))
+* Optimize the commit of packaged files ([e731b18](https://github.com/lmn1919/dompdf.js/commit/e731b18ef118c725354d10a3b919a08179d8d24e))
+* Optimize the commit of packaged files ([debf891](https://github.com/lmn1919/dompdf.js/commit/debf891bf77cd17184c5b71dec0c9f4871d3a59a))
+* Support excluding a page from header/footer injection ([79a0d45](https://github.com/lmn1919/dompdf.js/commit/79a0d45164cb9585848a51925209f844943a1bea))
+
 ## [1.3.0](https://github.com/lmn1919/dompdf.js/compare/v1.2.0...v1.3.0) (2026-04-29)
 
 
