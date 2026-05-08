@@ -3,10 +3,19 @@ import {Bounds} from '../css/layout/bounds';
 import type {TextBounds} from '../css/layout/text';
 import type {ElementContainer} from '../dom/element-container';
 import type {TextContainer} from '../dom/text-container';
-import type {pageConfigOptions} from './canvas/pdf-renderer';
+import type {pageConfigOptions, PageConfigFn} from './canvas/pdf-renderer';
 
 const PAGE_TOP_OFFSET = 10;
 const MAX_RECURSION_DEPTH = 1000;
+
+const resolvePageConfig = (
+    pageConfig: pageConfigOptions | PageConfigFn | undefined,
+    pageNum: number,
+    totalPages: number
+): pageConfigOptions | null => {
+    if (typeof pageConfig === 'function') return pageConfig(pageNum, totalPages);
+    return pageConfig ?? null;
+};
 
 class PageOffsetTracker {
     private offsets: number[] = [];
@@ -103,10 +112,10 @@ const filterTextNodesForPage = (
     container: ElementContainer,
     pageStart: number,
     pageEnd: number,
-    ctx: PageContext
+    ctx: PageContext,
+    pageIndex: number
 ): TextContainer[] => {
     const result: TextContainer[] = [];
-    const pageIndex = Math.floor(pageEnd / ctx.activePageHeight);
 
     for (const tc of container.textNodes) {
         const filtered: TextBounds[] = [];
@@ -161,12 +170,12 @@ const filterElementForPage = (
     pageStart: number,
     pageEnd: number,
     ctx: PageContext,
+    pageIndex: number,
     depth = 0
 ): ElementContainer | null => {
     if (depth > MAX_RECURSION_DEPTH) {
         throw new Error('Maximum recursion depth exceeded in filterElementForPage');
     }
-    const pageIndex = Math.floor(pageEnd / ctx.activePageHeight);
     const containerPageOffset = ctx.offsetTracker.getPageOffset(pageIndex);
     const top = container.bounds.top + containerPageOffset;
     const bottom = container.bounds.top + container.bounds.height + containerPageOffset;
@@ -190,9 +199,9 @@ const filterElementForPage = (
     }
 
     const children: ElementContainer[] = [];
-    const textNodes = filterTextNodesForPage(container, pageStart, pageEnd, ctx);
+    const textNodes = filterTextNodesForPage(container, pageStart, pageEnd, ctx, pageIndex);
     for (const child of container.elements) {
-        const part = filterElementForPage(child, pageStart, pageEnd, ctx, depth + 1);
+        const part = filterElementForPage(child, pageStart, pageEnd, ctx, pageIndex, depth + 1);
         if (part) children.push(part);
     }
     const visibleTop = Math.max(top, pageStart);
@@ -213,37 +222,55 @@ export const paginateNode = (
     pageHeight: number,
     initialOffset = 0,
     totalHeight?: number,
-    pageConfig?: pageConfigOptions
+    pageConfig?: pageConfigOptions | PageConfigFn
 ): ElementContainer[] => {
     if (initialOffset < 0) initialOffset = 0;
 
     const offsetTracker = new PageOffsetTracker();
     const breakStartPageMap = new Map<ElementContainer, number>();
-    const marginTop = Math.max(0, pageConfig?.header?.height ?? 0);
-    const marginBottom = Math.max(0, pageConfig?.footer?.height ?? 0);
-    const activePageHeight = pageHeight - marginTop - marginBottom;
 
-    if (!Number.isFinite(activePageHeight) || activePageHeight <= 0) {
+    const maxBottom = totalHeight != null && totalHeight >= 0 ? totalHeight : computeMaxBottom(root);
+
+    // Compute default active page height for initial page count estimation
+    const defaultCfg = resolvePageConfig(pageConfig, 1, 1);
+    const defaultMt = Math.max(0, defaultCfg?.header?.height ?? 0);
+    const defaultMb = Math.max(0, defaultCfg?.footer?.height ?? 0);
+    const defaultAph = pageHeight - defaultMt - defaultMb;
+
+    if (!Number.isFinite(defaultAph) || defaultAph <= 0) {
         throw new Error(`Invalid page height: header and footer exceed the available page height`);
     }
 
-    const maxBottom = totalHeight != null && totalHeight >= 0 ? totalHeight : computeMaxBottom(root);
-    const ctx: PageContext = {
-        offsetTracker,
-        activePageHeight,
-        pageMarginTop: marginTop,
-        breakStartPageMap
-    };
-
-    let totalPages = Math.max(1, Math.ceil((maxBottom - initialOffset) / activePageHeight));
+    let totalPages = Math.max(1, Math.ceil((maxBottom - initialOffset) / defaultAph));
     const pages: ElementContainer[] = [];
+    let contentPos = initialOffset;
+
     for (let i = 0; i < totalPages; i++) {
-        const pageStart = initialOffset + i * activePageHeight;
-        const pageEnd = pageStart + activePageHeight;
-        const pageRoot = filterElementForPage(root, pageStart, pageEnd, ctx);
+        const cfg = resolvePageConfig(pageConfig, i + 1, totalPages);
+        const mt = Math.max(0, cfg?.header?.height ?? 0);
+        const mb = Math.max(0, cfg?.footer?.height ?? 0);
+        const aph = pageHeight - mt - mb;
+
+        if (!Number.isFinite(aph) || aph <= 0) {
+            throw new Error(`Invalid page height on page ${i + 1}: header and footer exceed the available page height`);
+        }
+
+        const pageStart = contentPos;
+        const pageEnd = pageStart + aph;
+
+        const ctx: PageContext = {
+            offsetTracker,
+            activePageHeight: aph,
+            pageMarginTop: mt,
+            breakStartPageMap
+        };
+
+        const pageRoot = filterElementForPage(root, pageStart, pageEnd, ctx, i);
         if (pageRoot) pages.push(pageRoot);
 
-        const recalculatedPages = Math.max(1, Math.ceil((maxBottom + offsetTracker.total - initialOffset) / activePageHeight));
+        contentPos = pageEnd;
+
+        const recalculatedPages = Math.max(1, Math.ceil((maxBottom + offsetTracker.total - initialOffset) / defaultAph));
         if (recalculatedPages > totalPages) {
             totalPages = recalculatedPages;
         }

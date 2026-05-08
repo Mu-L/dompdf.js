@@ -85,6 +85,8 @@ export type pageConfigOptions = {
     footer: pageSectionConfig;
 };
 
+export type PageConfigFn = (pageNum: number, totalPages: number) => pageConfigOptions | null;
+
 export interface RenderOptions {
     scale: number;
     canvas?: HTMLCanvasElement;
@@ -143,7 +145,7 @@ export interface RenderOptions {
         | 'tabloid'
         | 'credit-card'
         | [number, number];
-    pageConfig?: pageConfigOptions;
+    pageConfig?: pageConfigOptions | PageConfigFn;
 }
 
 export class JsPdfContext2d {}
@@ -1256,7 +1258,8 @@ export class CanvasRenderer extends Renderer {
     }
 
     async renderPage(element: ElementContainer, pageNum: number): Promise<void> {
-        const cfg = this.options.pageConfig;
+        const rawCfg = this.options.pageConfig;
+        const cfg = typeof rawCfg === 'function' ? rawCfg(pageNum, this.totalPages) : rawCfg;
         const pageW = this.jspdfCtx.internal.pageSize.getWidth();
         const pageH = this.jspdfCtx.internal.pageSize.getHeight();
         const mt = 0;

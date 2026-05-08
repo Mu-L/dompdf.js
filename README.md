@@ -153,16 +153,52 @@ If you want an element to skip the current page and start rendering from the nex
 | `putOnlyUsedFonts` | No       | `false`    | `boolean`                | Embed only actually used fonts into PDF                                                                                                                                                                                                                                                                                                                   |
 | `pagination`       | No       | `false`    | `boolean`                | Enable pagination rendering                                                                                                                                                                                                                                                                                                                               |
 | `format`           | No       | `'a4'`     | `string`                 | Page size, supports `a0–a10`, `b0–b10`, `c0–c10`, `letter`, etc.                                                                                                                                                                                                                                                                                          |
-| `pageConfig`       | No       | See below  | `object`                 | Header and footer configuration                                                                                                                                                                                                                                                                                                                           |
+| `pageConfig`       | No       | See below  | `object \| Function`     | Header and footer configuration. Can be an object (applies to all pages) or a function `(pageNum, totalPages) => pageConfigOptions \| null` for per-page control                                                                                                                                                                                         |
 | `onJspdfReady`     | No       | ``         | `Function(jspdf: jsPDF)` | jspdf instance initialization                                                                                                                                                                                                                                                                                                                             |
 | `onJspdfFinish`    | No       | ``         | `Function(jspdf: jsPDF)` | jspdf instance finished drawing PDF                                                                                                                                                                                                                                                                                                                       |
 
 ##### `pageConfig` Fields:
 
-| Parameter | Default                     | Type   | Description     |
-| :-------- | :-------------------------- | :----- | :-------------- |
-| `header`  | See pageConfigOptions below | object | Header settings |
-| `footer`  | See pageConfigOptions below | object | Footer settings |
+| Parameter | Default                     | Type     | Description     |
+| :-------- | :-------------------------- | :------- | :-------------- |
+| `header`  | See pageConfigOptions below | object   | Header settings |
+| `footer`  | See pageConfigOptions below | object   | Footer settings |
+
+##### Per-Page Header/Footer Control
+
+`pageConfig` can also be a function `(pageNum, totalPages) => pageConfigOptions | null` to control headers and footers on a per-page basis. Return `null` for pages that should have no header/footer (the content area will expand to fill the full page height). This is useful for cover pages, end pages, or any page that needs a different layout.
+
+```js
+import dompdf from 'dompdf.js';
+
+dompdf(document.querySelector('#capture'), {
+    pagination: true,
+    format: 'a4',
+    pageConfig: (pageNum, totalPages) => {
+        // No header/footer on the cover page
+        if (pageNum === 1) return null;
+        // No header/footer on the last page
+        if (pageNum === totalPages) return null;
+        // Normal header/footer on all other pages
+        return {
+            header: {
+                content: 'Document Title',
+                height: 50,
+                contentColor: '#333333',
+                contentFontSize: 12,
+                contentPosition: 'center'
+            },
+            footer: {
+                content: 'Page ${currentPage} of ${totalPages}',
+                height: 50,
+                contentColor: '#333333',
+                contentFontSize: 12,
+                contentPosition: 'center'
+            }
+        };
+    }
+});
+```
 
 ##### `pageConfigOptions` Fields:
 

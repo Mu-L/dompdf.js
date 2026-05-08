@@ -748,24 +748,26 @@
                                 fontStyle: 'normal'
                             }
                         ],
-                        pageConfig: {
-                            header: {
-                                content: (dompdf, pageNum) => {
-                                    // 可以直接调用 dompdf.jspdfCtx 的任意 API
-                                    console.log(dompdf, pageNum, 'pdf,pageNum');
+                        pageConfig: (pageNum, totalPages) => {
+                            // 第一页不需要页眉页脚
+                            if (pageNum === 1) return null;
+                            return {
+                                header: {
+                                    content: (dompdf, pageNum) => {
+                                        // 可以直接调用 dompdf.jspdfCtx 的任意 API
+                                        console.log(dompdf, pageNum, 'pdf,pageNum');
+                                    },
+                                    height: 50
                                 },
-                                height: 50
-                            },
-                            footer: {
-                                content: 'Page ${currentPage} / ${totalPages}',
-                                height: 50,
-                                contentColor: '#333333',
-                                contentFontSize: 12,
-                                contentPosition: 'center',
-                                padding: [0, 0, 0, 0]
-                            }
-
-                           
+                                footer: {
+                                    content: 'Page ${currentPage} / ${totalPages}',
+                                    height: 50,
+                                    contentColor: '#333333',
+                                    contentFontSize: 12,
+                                    contentPosition: 'center',
+                                    padding: [0, 0, 0, 0]
+                                }
+                            };
                         },
 
                         onJspdfReady(jspdf) {

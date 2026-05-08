@@ -153,16 +153,52 @@ dompdf(document.querySelector('#capture'), {
 | `putOnlyUsedFonts` | 否   | `false`       | `boolean`                | 仅将实际使用的字体嵌入 PDF                                                                                                                                                                                                                    |
 | `pagination`       | 否   | `false`       | `boolean`                | 开启分页渲染                                                                                                                                                                                                                                  |
 | `format`           | 否   | `'a4'`        | `string`                 | 页面规格，支持 `a0–a10`、`b0–b10`、`c0–c10`、`letter` 等                                                                                                                                                                                      |
-| `pageConfig`       | 否   | 见下表        | `object`                 | 页眉页脚配置                                                                                                                                                                                                                                  |
+| `pageConfig`       | 否   | 见下表        | `object \| Function`     | 页眉页脚配置。可以是对象（应用于所有页面）或函数 `(pageNum, totalPages) => pageConfigOptions \| null` 用于按页控制                                                                                                                                                                                          |
 | `onJspdfReady`     | 否   | ``            | `Function(jspdf: jsPDF)` | jspdf 实例初始化                                                                                                                                                                                                                              |
 | `onJspdfFinish`    | 否   | ``            | `Function(jspdf: jsPDF)` | jspdf 实例绘制 pdf 完成                                                                                                                                                                                                                       |
 
 ##### `pageConfig`字段：
 
-| 参数名   | 默认值                   | 类型   | 说明     |
-| -------- | ------------------------ | ------ | -------- |
-| `header` | 见下表 pageConfigOptions | object | 页眉设置 |
-| `footer` | 见下表 pageConfigOptions | object | 页脚设置 |
+| 参数名   | 默认值                   | 类型     | 说明     |
+| -------- | ------------------------ | -------- | -------- |
+| `header` | 见下表 pageConfigOptions | object   | 页眉设置 |
+| `footer` | 见下表 pageConfigOptions | object   | 页脚设置 |
+
+##### 按页控制页眉页脚
+
+`pageConfig` 也可以是一个函数 `(pageNum, totalPages) => pageConfigOptions | null`，用于按页控制页眉页脚。返回 `null` 表示该页不显示页眉页脚（内容区域会扩展占满整页高度）。适用于封面页、尾页或需要不同布局的页面。
+
+```js
+import dompdf from 'dompdf.js';
+
+dompdf(document.querySelector('#capture'), {
+    pagination: true,
+    format: 'a4',
+    pageConfig: (pageNum, totalPages) => {
+        // 封面页不显示页眉页脚
+        if (pageNum === 1) return null;
+        // 最后一页不显示页眉页脚
+        if (pageNum === totalPages) return null;
+        // 其余页面正常显示页眉页脚
+        return {
+            header: {
+                content: '文档标题',
+                height: 50,
+                contentColor: '#333333',
+                contentFontSize: 12,
+                contentPosition: 'center'
+            },
+            footer: {
+                content: '第${currentPage}页/共${totalPages}页',
+                height: 50,
+                contentColor: '#333333',
+                contentFontSize: 12,
+                contentPosition: 'center'
+            }
+        };
+    }
+});
+```
 
 ##### `pageConfigOptions` 字段：
 
