@@ -3,60 +3,69 @@ import {Bounds} from '../css/layout/bounds';
 import type {TextBounds} from '../css/layout/text';
 import type {ElementContainer} from '../dom/element-container';
 import type {TextContainer} from '../dom/text-container';
-import {pageConfigOptions} from './canvas/pdf-renderer';
+import type {pageConfigOptions} from './canvas/pdf-renderer';
 
-let offSetPageObj: Record<number | string, number> = {};
-let offSetTotal = 0;
-let activePageHeight = 1123;
-let pageMarginTop = 0;
-let pageMarginBottom = 0;
-let pageBreakStartPageMap = new WeakMap<ElementContainer, number>();
-// let realPageSize = 0;
-const pageTopOffset = 10;
+const PAGE_TOP_OFFSET = 10;
+const MAX_RECURSION_DEPTH = 1000;
 
-const getPageKeys = (): number[] =>
-    Object.keys(offSetPageObj)
-        .map((k) => +k)
-        .filter((k) => Number.isFinite(k))
-        .sort((a, b) => a - b);
+class PageOffsetTracker {
+    private offsets: number[] = [];
+    private maxOffset = 0;
 
-const getPreviousPageOffset = (pageIndex: number): number => {
-    const previousKeys = getPageKeys().filter((k) => k < pageIndex);
-    if (previousKeys.length === 0) {
+    getPageOffset(pageIndex: number): number {
+        for (let i = pageIndex; i >= 0; i--) {
+            const v = this.offsets[i];
+            if (v !== undefined) return v;
+        }
         return 0;
     }
-    return offSetPageObj[previousKeys[previousKeys.length - 1]] || 0;
-};
 
-const getPageOffset = (pageIndex: number): number => {
-    const pageKeys = getPageKeys().filter((k) => k <= pageIndex);
-    if (pageKeys.length === 0) {
+    getPreviousPageOffset(pageIndex: number): number {
+        for (let i = pageIndex - 1; i >= 0; i--) {
+            const v = this.offsets[i];
+            if (v !== undefined) return v;
+        }
         return 0;
     }
-    return offSetPageObj[pageKeys[pageKeys.length - 1]] || 0;
-};
 
-const updatePageOffset = (pageIndex: number, offsetNum: number): number => {
-    const previousPageOffset = getPreviousPageOffset(pageIndex);
-    const nextOffset = previousPageOffset + offsetNum;
-    const currentOffset = offSetPageObj[pageIndex] || previousPageOffset;
+    updatePageOffset(pageIndex: number, delta: number): number {
+        const previousOffset = this.getPreviousPageOffset(pageIndex);
+        const nextOffset = previousOffset + delta;
+        const currentOffset = this.offsets[pageIndex] ?? previousOffset;
 
-    if (nextOffset > currentOffset) {
-        offSetPageObj[pageIndex] = nextOffset;
-        offSetTotal = Math.max(offSetTotal, nextOffset);
-        return nextOffset;
+        if (nextOffset > currentOffset) {
+            this.offsets[pageIndex] = nextOffset;
+            if (nextOffset > this.maxOffset) this.maxOffset = nextOffset;
+            return nextOffset;
+        }
+        return currentOffset;
     }
 
-    return currentOffset;
-};
+    get total(): number {
+        return this.maxOffset;
+    }
+
+    reset(): void {
+        this.offsets.length = 0;
+        this.maxOffset = 0;
+    }
+}
+
+interface PageContext {
+    offsetTracker: PageOffsetTracker;
+    activePageHeight: number;
+    pageMarginTop: number;
+    breakStartPageMap: Map<ElementContainer, number>;
+}
+
 const cloneContainerShallow = (src: ElementContainer): ElementContainer => {
-    const c = Object.create(Object.getPrototypeOf(src)) as any;
+    const c = Object.create(Object.getPrototypeOf(src)) as Record<string, unknown>;
     const srcObj = src as unknown as Record<string, unknown>;
     for (const key of Object.keys(srcObj)) {
         if (key === 'elements' || key === 'bounds' || key === 'styles' || key === 'textNodes') continue;
         c[key] = srcObj[key];
     }
-    c.context = (src as ElementContainer & {context: Context}).context;
+    c.context = (src as unknown as {context: Context}).context;
     c.styles = Object.assign(Object.create(Object.getPrototypeOf(src.styles)), src.styles);
     c.textNodes = src.textNodes;
     c.flags = src.flags;
@@ -66,13 +75,16 @@ const cloneContainerShallow = (src: ElementContainer): ElementContainer => {
 };
 
 const cloneTextContainerShallow = (src: TextContainer): TextContainer => {
-    const c = Object.create(Object.getPrototypeOf(src)) as any;
-    c.text = (src as any).text;
+    const c = Object.create(Object.getPrototypeOf(src)) as Record<string, unknown>;
+    c.text = (src as unknown as {text: string}).text;
     c.textBounds = [] as TextBounds[];
-    return c as TextContainer;
+    return c as unknown as TextContainer;
 };
 
-const computeMaxBottom = (node: ElementContainer): number => {
+const computeMaxBottom = (node: ElementContainer, depth = 0): number => {
+    if (depth > MAX_RECURSION_DEPTH) {
+        throw new Error('Maximum recursion depth exceeded in computeMaxBottom');
+    }
     let maxBottom = node.bounds.top + node.bounds.height;
     for (const tn of node.textNodes) {
         for (const tb of tn.textBounds) {
@@ -81,22 +93,27 @@ const computeMaxBottom = (node: ElementContainer): number => {
         }
     }
     for (const el of node.elements) {
-        const b = computeMaxBottom(el);
+        const b = computeMaxBottom(el, depth + 1);
         if (b > maxBottom) maxBottom = b;
     }
     return maxBottom;
 };
 
-const filterTextNodesForPage = (container: ElementContainer, pageStart: number, pageEnd: number): TextContainer[] => {
+const filterTextNodesForPage = (
+    container: ElementContainer,
+    pageStart: number,
+    pageEnd: number,
+    ctx: PageContext
+): TextContainer[] => {
     const result: TextContainer[] = [];
+    const pageIndex = Math.floor(pageEnd / ctx.activePageHeight);
 
     for (const tc of container.textNodes) {
         const filtered: TextBounds[] = [];
 
         for (const tb of tc.textBounds) {
-            const pageIndex = Math.floor(pageEnd / activePageHeight);
-            const activePageOffset = getPageOffset(pageIndex);
-            const prevPageOffset = getPreviousPageOffset(pageIndex);
+            const activePageOffset = ctx.offsetTracker.getPageOffset(pageIndex);
+            const prevPageOffset = ctx.offsetTracker.getPreviousPageOffset(pageIndex);
             let top = tb.bounds.top + activePageOffset;
             let bottom = tb.bounds.top + tb.bounds.height + activePageOffset;
             const intersects = bottom > pageStart && top < pageEnd;
@@ -105,10 +122,8 @@ const filterTextNodesForPage = (container: ElementContainer, pageStart: number, 
                 let offsetNum = 0;
                 if (top < pageStart) {
                     if (prevPageOffset || pageIndex > 1) {
-                        // Because the offset is only increased when paging occurs, and each time elements are paged, a full traversal is performed
-                        // Determine that the current text does not require pagination rendering based on the height calculated on the previous page, so proceed directly to continue
-                        const prevPageStart = pageStart - activePageHeight;
-                        const prevPageEnd = pageEnd - activePageHeight;
+                        const prevPageStart = pageStart - ctx.activePageHeight;
+                        const prevPageEnd = pageEnd - ctx.activePageHeight;
                         const prevTop = tb.bounds.top + prevPageOffset;
                         const prevBottom = tb.bounds.top + tb.bounds.height + prevPageOffset;
                         const prevIntersects = prevBottom > prevPageStart && prevTop < prevPageEnd;
@@ -117,31 +132,23 @@ const filterTextNodesForPage = (container: ElementContainer, pageStart: number, 
                             continue;
                         }
                     }
-                    offsetNum = pageStart - top + pageTopOffset;
-                    const nextOffset = updatePageOffset(pageIndex, offsetNum);
-                    // Fix the issue where no offset is added for the first text container
+                    offsetNum = pageStart - top + PAGE_TOP_OFFSET;
+                    const nextOffset = ctx.offsetTracker.updatePageOffset(pageIndex, offsetNum);
                     const appliedOffset = nextOffset - activePageOffset;
                     bottom += appliedOffset;
                     top += appliedOffset;
-                    // fix add realpageSize
-                    // TODO
-                    // if (offsetNum && realPageSize <= pageIndex) {
-                    //     realPageSize = pageIndex + 1;
-                    // }
                 }
                 const visibleTop = Math.max(top, pageStart);
                 const visibleBottom = Math.min(bottom, pageEnd);
                 const newTop = visibleTop - pageStart;
                 const newHeight = Math.max(0, visibleBottom - visibleTop);
-                // Generate new Bounds based on the visible area
-                const nb = new Bounds(tb.bounds.left, newTop + pageMarginTop, tb.bounds.width, newHeight);
-                // Put the text content and the new bounds into filtered
-                filtered.push({text: (tb as any).text, bounds: nb} as TextBounds);
+                const nb = new Bounds(tb.bounds.left, newTop + ctx.pageMarginTop, tb.bounds.width, newHeight);
+                filtered.push({text: (tb as unknown as {text: string}).text, bounds: nb} as TextBounds);
             }
         }
         if (filtered.length > 0) {
             const clone = cloneTextContainerShallow(tc);
-            (clone as any).textBounds = filtered;
+            (clone as unknown as Record<string, unknown>).textBounds = filtered;
             result.push(clone);
         }
     }
@@ -152,41 +159,40 @@ const filterTextNodesForPage = (container: ElementContainer, pageStart: number, 
 const filterElementForPage = (
     container: ElementContainer,
     pageStart: number,
-    pageEnd: number
+    pageEnd: number,
+    ctx: PageContext,
+    depth = 0
 ): ElementContainer | null => {
-    const pageIndex = Math.floor(pageEnd / activePageHeight);
-    const containerPageOffset = getPageOffset(pageIndex);
-    let top = container.bounds.top + containerPageOffset;
-    let bottom = container.bounds.top + container.bounds.height + containerPageOffset;
+    if (depth > MAX_RECURSION_DEPTH) {
+        throw new Error('Maximum recursion depth exceeded in filterElementForPage');
+    }
+    const pageIndex = Math.floor(pageEnd / ctx.activePageHeight);
+    const containerPageOffset = ctx.offsetTracker.getPageOffset(pageIndex);
+    const top = container.bounds.top + containerPageOffset;
+    const bottom = container.bounds.top + container.bounds.height + containerPageOffset;
 
-    const pageBreakStartPage = pageBreakStartPageMap.get(container);
-    if (pageBreakStartPage && pageIndex < pageBreakStartPage) {
+    const breakStartPage = ctx.breakStartPageMap.get(container);
+    if (breakStartPage !== undefined && pageIndex < breakStartPage) {
         return null;
     }
 
-    if (container.pageBreak && !pageBreakStartPage && bottom > pageStart && top < pageEnd) {
-        const offsetNum = pageEnd - top + pageTopOffset;
-        updatePageOffset(pageIndex, offsetNum);
-        pageBreakStartPageMap.set(container, pageIndex + 1);
+    if (container.pageBreak && breakStartPage === undefined && bottom > pageStart && top < pageEnd) {
+        const offsetNum = pageEnd - top + PAGE_TOP_OFFSET;
+        ctx.offsetTracker.updatePageOffset(pageIndex, offsetNum);
+        ctx.breakStartPageMap.set(container, pageIndex + 1);
         return null;
     }
 
     if (container.divisionDisable && bottom > pageEnd && top < pageEnd) {
-        const offsetNum = pageEnd - top + pageTopOffset;
-        updatePageOffset(pageIndex, offsetNum);
-        // fix add realpageSize
-        // TODO
-        // if (offsetNum && realPageSize <= pageIndex) {
-        //     realPageSize = pageIndex + 1;
-        // }
+        const offsetNum = pageEnd - top + PAGE_TOP_OFFSET;
+        ctx.offsetTracker.updatePageOffset(pageIndex, offsetNum);
         return null;
     }
 
     const children: ElementContainer[] = [];
-    // Modify the order of `filterTextNodesForPage` and `filterElementForPage`, traversing text nodes first and then child elements, to avoid incorrect setting of `activePageOffset` when the current section spans multiple pages
-    const textNodes = filterTextNodesForPage(container, pageStart, pageEnd);
+    const textNodes = filterTextNodesForPage(container, pageStart, pageEnd, ctx);
     for (const child of container.elements) {
-        const part = filterElementForPage(child, pageStart, pageEnd);
+        const part = filterElementForPage(child, pageStart, pageEnd, ctx, depth + 1);
         if (part) children.push(part);
     }
     const visibleTop = Math.max(top, pageStart);
@@ -194,12 +200,12 @@ const filterElementForPage = (
     const newHeight = Math.max(0, visibleBottom - visibleTop);
     const hasContent = children.length > 0 || textNodes.length > 0 || newHeight > 0;
     if (!hasContent) return null;
-    const clone = cloneContainerShallow(container) as any;
+    const clone = cloneContainerShallow(container) as unknown as Record<string, unknown>;
     clone.elements = children;
     clone.textNodes = textNodes;
     const newTop = visibleTop >= pageStart ? visibleTop - pageStart : 0;
-    clone.bounds = new Bounds(container.bounds.left, newTop + pageMarginTop, container.bounds.width, newHeight);
-    return clone as ElementContainer;
+    clone.bounds = new Bounds(container.bounds.left, newTop + ctx.pageMarginTop, container.bounds.width, newHeight);
+    return clone as unknown as ElementContainer;
 };
 
 export const paginateNode = (
@@ -210,40 +216,37 @@ export const paginateNode = (
     pageConfig?: pageConfigOptions
 ): ElementContainer[] => {
     if (initialOffset < 0) initialOffset = 0;
-    offSetTotal = 0;
-    offSetPageObj = {};
-    pageBreakStartPageMap = new WeakMap<ElementContainer, number>();
-    const maxBottom = totalHeight || computeMaxBottom(root);
-    pageMarginTop = pageConfig?.header?.height || 0;
-    pageMarginBottom = pageConfig?.footer?.height || 0;
-    activePageHeight = pageHeight - pageMarginTop - pageMarginBottom;
-    if (activePageHeight <= 0) {
+
+    const offsetTracker = new PageOffsetTracker();
+    const breakStartPageMap = new Map<ElementContainer, number>();
+    const marginTop = Math.max(0, pageConfig?.header?.height ?? 0);
+    const marginBottom = Math.max(0, pageConfig?.footer?.height ?? 0);
+    const activePageHeight = pageHeight - marginTop - marginBottom;
+
+    if (!Number.isFinite(activePageHeight) || activePageHeight <= 0) {
         throw new Error(`Invalid page height: header and footer exceed the available page height`);
     }
+
+    const maxBottom = totalHeight != null && totalHeight >= 0 ? totalHeight : computeMaxBottom(root);
+    const ctx: PageContext = {
+        offsetTracker,
+        activePageHeight,
+        pageMarginTop: marginTop,
+        breakStartPageMap
+    };
+
     let totalPages = Math.max(1, Math.ceil((maxBottom - initialOffset) / activePageHeight));
-    // realPageSize = totalPages;
     const pages: ElementContainer[] = [];
     for (let i = 0; i < totalPages; i++) {
         const pageStart = initialOffset + i * activePageHeight;
         const pageEnd = pageStart + activePageHeight;
-        const pageRoot = filterElementForPage(root, pageStart, pageEnd);
+        const pageRoot = filterElementForPage(root, pageStart, pageEnd, ctx);
         if (pageRoot) pages.push(pageRoot);
 
-        const recalculatedPages = Math.max(1, Math.ceil((maxBottom + offSetTotal - initialOffset) / activePageHeight));
+        const recalculatedPages = Math.max(1, Math.ceil((maxBottom + offsetTracker.total - initialOffset) / activePageHeight));
         if (recalculatedPages > totalPages) {
             totalPages = recalculatedPages;
         }
     }
-    // If the number of pages increases due to divisionDisable or text truncation, recalculation of pages is required
-    // TODO
-    // if (realPageSize > totalPages) {
-    //     for (let i = totalPages; i < realPageSize; i++) {
-    //         const pageStart = initialOffset + i * activePageHeight;
-    //         const pageEnd = pageStart + activePageHeight;
-    //         const pageRoot = filterElementForPage(root, pageStart, pageEnd);
-    //         if (pageRoot) pages.push(pageRoot);
-    //     }
-    // }
-    // console.log(offSetPageObj, '偏移量');
     return pages;
 };
